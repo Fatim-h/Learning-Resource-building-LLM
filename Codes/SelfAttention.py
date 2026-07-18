@@ -152,4 +152,138 @@ print("Are the aligned output matrices mathematically equal?")
 print(torch.allclose(v1_aligned_output, v2_output))
 """
 Causal Attention
+
+Single head vs multihead:
+Take this sentence:
+
+"The animal didn't cross the street because it was too tired."
+
+When a transformer processes the word "it", it needs to figure out
+what "it" refers to.A single attention head might focus heavily on
+the relationship between "it" and "animal".
+
+But what if the sentence was changed to: "because it was too wide"?
+Now, "it" refers to the street.
+
+A single head has to make a hard choice: do I look at the animal or the street?
+
+Multi-Head Attention removes this limitation. Head 1 can link "it" 
+to "animal" (tracking the subject), while Head 2 can link "it" to 
+"tired" (tracking the state/adjective). By having multiple heads, 
+the model can capture both relationships at the exact same time.
 """
+inputs = torch.tensor([
+    [[0.43, 0.15, 0.89], [0.55, 0.87, 0.66], [0.57, 0.85, 0.64], 
+     [0.22, 0.58, 0.33], [0.77, 0.25, 0.10], [0.05, 0.80, 0.55]],
+    [[0.43, 0.15, 0.89], [0.55, 0.87, 0.66], [0.57, 0.85, 0.64], 
+     [0.22, 0.58, 0.33], [0.77, 0.25, 0.10], [0.05, 0.80, 0.55]]
+])
+
+batch_size, context_length, d_in = inputs.shape
+d_out = 2  # Desired target feature size
+
+print(f"Input Tensor Shape: {inputs.shape} (Batch, Tokens, Features)")
+
+# =====================================================================
+# PART 1: Single Causal Attention Head
+# =====================================================================
+class SingleCausalAttention(nn.Module):
+    def __init__(self, d_in, d_out, context_length):
+        super().__init__()
+        self.d_out = d_out
+        self.W_query = nn.Linear(d_in, d_out, bias=False)
+        self.W_key   = nn.Linear(d_in, d_out, bias=False)
+        self.W_value = nn.Linear(d_in, d_out, bias=False)
+        
+        # Upper triangular mask filled with 1s above the diagonal
+        self.register_buffer("mask", torch.triu(torch.ones(context_length, context_length), diagonal=1))
+
+    def forward(self, x):
+        # 1. Linear project into single Q, K, V tracks
+        queries = self.W_query(x)  # Shape: (b, num_tokens, d_out)
+        keys = self.W_key(x)      # Shape: (b, num_tokens, d_out)
+        values = self.W_value(x)  # Shape: (b, num_tokens, d_out)
+        
+        # 2. Compute similarity scores
+        attn_scores = queries @ keys.transpose(1, 2)  # Shape: (b, num_tokens, num_tokens)
+        
+        # 3. Apply Causal Mask (-inf trick)
+        num_tokens = x.shape[1]
+        attn_scores.masked_fill_(self.mask.bool()[:num_tokens, :num_tokens], float('-inf'))
+        
+        # 4. Turn scores into probabilities
+        attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
+        
+        # 5. Blend weights with the content values
+        context_vec = attn_weights @ values  # Shape: (b, num_tokens, d_out)
+        return context_vec
+
+# =====================================================================
+# PART 2: Parallelized Multi-Head Attention
+# =====================================================================
+class ParallelMultiHeadAttention(nn.Module):
+    def __init__(self, d_in, d_out, context_length, num_heads):
+        super().__init__()
+        assert d_out % num_heads == 0, "d_out must be divisible by num_heads"
+        
+        self.d_out = d_out
+        self.num_heads = num_heads
+        self.head_dim = d_out // num_heads  # Dimension split per head
+        
+        # Giant linear layers processing all heads at once
+        self.W_query = nn.Linear(d_in, d_out, bias=False)
+        self.W_key   = nn.Linear(d_in, d_out, bias=False)
+        self.W_value = nn.Linear(d_in, d_out, bias=False)
+        
+        # Fuses all individual head perspectives back together
+        self.out_proj = nn.Linear(d_out, d_out)
+        self.register_buffer("mask", torch.triu(torch.ones(context_length, context_length), diagonal=1))
+
+    def forward(self, x):
+        b, num_tokens, _ = x.shape
+        
+        # 1. Project inputs into large unified spaces
+        queries = self.W_query(x)
+        keys = self.W_key(x)
+        values = self.W_value(x)
+        
+        # 2. Reshape to separate into individual heads: (b, tokens, heads, head_dim)
+        queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
+        keys = keys.view(b, num_tokens, self.num_heads, self.head_dim)
+        values = values.view(b, num_tokens, self.num_heads, self.head_dim)
+        
+        # 3. Transpose for batched operations: (b, heads, tokens, head_dim)
+        queries = queries.transpose(1, 2)
+        keys = keys.transpose(1, 2)
+        values = values.transpose(1, 2)
+        
+        # 4. Batched matrix multiplication for all heads at once
+        attn_scores = queries @ keys.transpose(2, 3) # Shape: (b, heads, tokens, tokens)
+        
+        # 5. Apply the causal mask
+        attn_scores.masked_fill_(self.mask.bool()[:num_tokens, :num_tokens], float('-inf'))
+        
+        # 6. Normalize and blend with values
+        attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
+        context_vec = attn_weights @ values # Shape: (b, heads, tokens, head_dim)
+        
+        # 7. Re-assemble (flatten) the heads: (b, tokens, d_out)
+        context_vec = context_vec.transpose(1, 2).contiguous().view(b, num_tokens, self.d_out)
+        
+        # 8. Project the blended representation
+        return self.out_proj(context_vec)
+
+# =====================================================================
+# Execution and Verification
+# =====================================================================
+torch.manual_seed(42)
+
+single_head = SingleCausalAttention(d_in, d_out, context_length)
+mha_block = ParallelMultiHeadAttention(d_in, d_out, context_length, num_heads=2)
+
+single_out = single_head(inputs)
+mha_out = mha_block(inputs)
+
+print("\n--- Output Verification ---")
+print("Single Head Output Shape :", single_out.shape)
+print("Multi-Head Output Shape  :", mha_out.shape)
