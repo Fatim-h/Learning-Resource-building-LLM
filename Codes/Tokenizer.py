@@ -183,3 +183,7 @@ if __name__ == "__main__":
 
     print("Inputs Tensor:\n", inputs)
     print("\nTargets Tensor:\n", targets)
+
+# ==========================================
+#Next you create the embedding layer from these tokens,
+# ==========================================
