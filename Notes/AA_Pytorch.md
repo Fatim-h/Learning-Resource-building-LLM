@@ -106,14 +106,14 @@ loss = F.binary_cross_entropy(a, y)
 ```
 ```mermaid
 flowchart LR
-    %% Class Definitions for Styling
-    classDef weight fill:#52b7e8,stroke:#333,stroke-width:1px,color:#fff,font-weight:bold;
-    classDef input fill:#a2d071,stroke:#333,stroke-width:1px,color:#fff,font-weight:bold;
-    classDef bias fill:#52b7e8,stroke:#333,stroke-width:1px,color:#fff,font-weight:bold;
-    classDef label fill:#ef85b1,stroke:#333,stroke-width:1px,color:#fff,font-weight:bold;
-    classDef op fill:#fff,stroke:#333,stroke-width:1.5px;
-    classDef box fill:#fff,stroke:#333,stroke-width:1.5px,rx:5,ry:5;
-    classDef text fill:none,stroke:none,font-weight:bold;
+    %% Class Definitions for High Visibility
+    classDef weight fill:#52b7e8,stroke:#1e1e1e,stroke-width:1.5px,color:#000,font-weight:bold;
+    classDef input fill:#a2d071,stroke:#1e1e1e,stroke-width:1.5px,color:#000,font-weight:bold;
+    classDef bias fill:#52b7e8,stroke:#1e1e1e,stroke-width:1.5px,color:#000,font-weight:bold;
+    classDef label fill:#ef85b1,stroke:#1e1e1e,stroke-width:1.5px,color:#000,font-weight:bold;
+    classDef op fill:#ffffff,stroke:#1e1e1e,stroke-width:1.5px,color:#000,font-weight:bold;
+    classDef box fill:#ffffff,stroke:#1e1e1e,stroke-width:1.5px,color:#000,font-weight:bold,rx:5,ry:5;
+    classDef text fill:none,stroke:none,color:#222,font-weight:bold;
 
     %% Annotations
     T1["A trainable weight<br>parameter"]
@@ -175,10 +175,12 @@ self.layers = torch.nn.Sequential(
 logits = self.layers(x)
 return logits 
 
-#instantiate
-model = NeuralNetwork(50, 3)
+# instantiate model (50 input features, 3 target classes)
+torch.manual_seed(123)
+model = NeuralNetwork(num_inputs=50, num_outputs=3)
 
-#check
+# inspect
+print("Model Structure:")
 print(model)
 
 """
@@ -193,4 +195,77 @@ NeuralNetwork(
   )
 )
 """
+# check total trainable parameters
+num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print("\nTotal trainable parameters:", num_params)
+#prints: Total number of trainable model parameters: 2213
+
+print(model.layers[0].weight)
+"""
+output:
+Parameter containing:
+tensor([[ 0.1174, -0.1350, -0.1227,  ...,  0.0275, -0.0520, -0.0192],
+        [-0.0169,  0.1265,  0.0255,  ..., -0.1247,  0.1191, -0.0698],
+        [-0.0973, -0.0974, -0.0739,  ..., -0.0068, -0.0892,  0.1070],
+        ...,
+        [-0.0681,  0.1058, -0.0315,  ..., -0.1081, -0.0290, -0.1374],
+        [-0.0159,  0.0587, -0.0916,  ..., -0.1153,  0.0700,  0.0770],
+        [-0.1019,  0.1345, -0.0176,  ...,  0.0114, -0.0559, -0.0088]],
+       requires_grad=True)
+"""
+
+# forward Pass (single sample batch)
+X = torch.rand((1, 50))
+
+# forward pass for training (tracks computational graph grad_fn)
+logits = model(X)
+
+# forward pass for inference (saves memory by disabling gradient tracking)
+with torch.no_grad():
+    probabilities = torch.softmax(model(X), dim=1)
+
+```
+```mermaid
+flowchart LR
+    %% High-contrast class definitions
+    classDef input fill:#a2d071,stroke:#1e1e1e,stroke-width:1.5px,color:#000,font-weight:bold;
+    classDef layer fill:#52b7e8,stroke:#1e1e1e,stroke-width:1.5px,color:#000,font-weight:bold;
+    classDef act fill:#ffffff,stroke:#1e1e1e,stroke-width:1.5px,color:#000,font-weight:bold,rx:5,ry:5;
+    classDef output fill:#ef85b1,stroke:#1e1e1e,stroke-width:1.5px,color:#000,font-weight:bold;
+    classDef note fill:none,stroke:none,color:#222,font-weight:bold;
+
+    %% Network Layers
+    X["Input X<br>(1, 50)"]:::input
+    L1["Linear 1<br>(50 → 30)"]:::layer
+    R1["ReLU()"]:::act
+    L2["Linear 2<br>(30 → 20)"]:::layer
+    R2["ReLU()"]:::act
+    L3["Linear 3<br>(20 → 3)"]:::layer
+    LOGITS["Logits<br>(1, 3)"]:::output
+    PROBS["Softmax<br>Probabilities"]:::output
+
+    %% Context annotations
+    T1["Features input vector"]
+    T2["Hidden Layer 1"]
+    T3["Hidden Layer 2"]
+    T4["Unnormalized scores"]
+    T5["Sum to 1.0 (Inference)"]
+
+    %% Connections
+    X --> L1
+    L1 --> R1
+    R1 --> L2
+    L2 --> R2
+    R2 --> L3
+    L3 --> LOGITS
+    LOGITS -. "torch.softmax()" .-> PROBS
+
+    %% Annotation Links
+    T1 -.- X
+    T2 -.- L1
+    T3 -.- L2
+    T4 -.- LOGITS
+    T5 -.- PROBS
+
+    class T1,T2,T3,T4,T5 note;
 ```
